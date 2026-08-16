@@ -1,7 +1,7 @@
 {
   "name": "vibx",
   "main": "index.js",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "dependencies": {
     "@react-native-community/slider": "5.2.0",
     "@rntp/player": "^5.8.0",

@@ -39,3 +39,8 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# backend
+backend/rust/target/
+python/__pycache__/
+python/.venv/

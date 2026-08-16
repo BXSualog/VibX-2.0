@@ -1,0 +1,11 @@
+node_modules/
+.expo/
+dist/
+web-build/
+/ios
+/android
+backend/rust/target/
+python/__pycache__/
+python/.venv/
+*.tsbuildinfo
+.DS_Store

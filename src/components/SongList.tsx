@@ -1,8 +1,9 @@
 import { memo, useCallback, useMemo, useState, type ComponentType, type ReactElement } from 'react';
-import { FlatList, View, type LayoutChangeEvent, type ListRenderItem } from 'react-native';
+import { FlatList, View, type LayoutChangeEvent, type ListRenderItem, type StyleProp, type ViewStyle } from 'react-native';
 import { useActiveMediaItem, useIsPlaying } from '@rntp/player';
 import { AzLetterHeader, AZ_LETTER_HEADER_HEIGHT } from '@/src/components/AzLetterHeader';
 import { SongCard, SONG_ROW_HEIGHT } from '@/src/components/SongCard/SongCard';
+import { usePlayerStore } from '@/src/stores/playerStore';
 import { flattenAzItems, layoutsForRows } from '@/src/utils/sort';
 import { normalizeTrackLabels } from '@/src/utils/metadata';
 import type { Song } from '@/src/types/music';
@@ -10,12 +11,18 @@ import type { Song } from '@/src/types/music';
 export { SONG_ROW_HEIGHT };
 
 export const LIST_SCROLL_PROPS = {
-  initialNumToRender: 16,
-  maxToRenderPerBatch: 16,
-  updateCellsBatchingPeriod: 16,
-  windowSize: 10,
+  initialNumToRender: 10,
+  maxToRenderPerBatch: 8,
+  updateCellsBatchingPeriod: 50,
+  windowSize: 5,
   removeClippedSubviews: false,
 } as const;
+
+const LIST_STYLE: ViewStyle = { flex: 1, width: '100%' };
+const LIST_CONTENT_STYLE: ViewStyle = {
+  paddingBottom: 24,
+  width: '100%',
+};
 
 type Row = ReturnType<typeof flattenAzItems<Song>>[number];
 
@@ -27,7 +34,7 @@ type Props = {
   groupByLetter?: boolean;
   ListEmptyComponent?: ComponentType | ReactElement | null;
   ListHeaderComponent?: ComponentType | ReactElement | null;
-  contentContainerClassName?: string;
+  contentContainerStyle?: StyleProp<ViewStyle>;
   keyboardShouldPersistTaps?: 'always' | 'never' | 'handled';
 };
 
@@ -39,11 +46,15 @@ export const SongList = memo(function SongList({
   groupByLetter = false,
   ListEmptyComponent,
   ListHeaderComponent,
-  contentContainerClassName = 'pb-16',
+  contentContainerStyle,
   keyboardShouldPersistTaps = 'handled',
 }: Props) {
-  const activeId = useActiveMediaItem()?.mediaId ?? null;
-  const playing = useIsPlaying();
+  const nativeId = useActiveMediaItem()?.mediaId ?? null;
+  const nativePlaying = useIsPlaying();
+  const currentSongId = usePlayerStore((state) => state.currentSong?.id ?? null);
+  const storePlaying = usePlayerStore((state) => state.isPlaying);
+  const activeId = currentSongId ?? nativeId;
+  const playing = currentSongId ? storePlaying : nativePlaying;
   const [headerHeight, setHeaderHeight] = useState(92);
 
   const rows = useMemo(
@@ -107,13 +118,14 @@ export const SongList = memo(function SongList({
 
   return (
     <FlatList
+      style={LIST_STYLE}
       data={rows}
       keyExtractor={rowKeyExtractor}
       renderItem={renderItem}
-      extraData={`${activeId}:${playing}`}
+      extraData={`${activeId}:${playing}:${currentSongId}:${storePlaying}`}
       ListEmptyComponent={ListEmptyComponent}
       ListHeaderComponent={header}
-      contentContainerClassName={contentContainerClassName}
+      contentContainerStyle={[LIST_CONTENT_STYLE, contentContainerStyle]}
       keyboardShouldPersistTaps={keyboardShouldPersistTaps}
       getItemLayout={getItemLayout}
       {...LIST_SCROLL_PROPS}

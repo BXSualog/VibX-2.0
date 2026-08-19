@@ -1,6 +1,5 @@
-import { memo, useCallback, type ReactNode } from "react";
-import { MINI_PLAYER_HEIGHT } from "@/src/components/MiniPlayer/MiniPlayer";
-import { MiniPlayerTabSpacer } from "@/src/components/MiniPlayer/MiniPlayerDock";
+import { MiniPlayer } from "@/src/components/MiniPlayer/MiniPlayer";
+import { useNowPlayingVisible } from "@/src/components/MiniPlayer/MiniPlayerDock";
 import { VyzeFab } from "@/src/components/Vyze/VyzeFab";
 import { VyzePanel } from "@/src/components/Vyze/VyzePanel";
 import { VyzeQueue } from "@/src/components/Vyze/VyzeQueue";
@@ -9,8 +8,8 @@ import { colors } from "@/src/theme/colors";
 import * as Haptics from "expo-haptics";
 import { Tabs } from "expo-router";
 import { SymbolView } from "expo-symbols";
+import { memo, useCallback, type ReactNode } from "react";
 import { Pressable, Text, View, type ColorValue } from "react-native";
-import { useActiveMediaItem } from "@rntp/player";
 
 const tabScreenOptions = {
   headerShown: false,
@@ -20,6 +19,12 @@ const tabScreenOptions = {
   tabBarActiveTintColor: colors.accent,
   tabBarInactiveTintColor: colors.muted,
   sceneStyle: { backgroundColor: colors.background },
+  tabBarStyle: {
+    backgroundColor: "transparent",
+    borderTopWidth: 0,
+    elevation: 0,
+    shadowOpacity: 0,
+  },
 };
 
 type TabIconProps = { color: ColorValue; focused: boolean; size: number };
@@ -131,20 +136,22 @@ const VibxTabBar = memo(function VibxTabBar({
     [navigation],
   );
 
-  const playingItem = useActiveMediaItem();
-  const fabTop = playingItem ? -(MINI_PLAYER_HEIGHT + 28) : -100;
+  const playingItem = useNowPlayingVisible();
+  const fabTop = playingItem ? -95 : -116;
 
   return (
-    <View className="bg-vibx-bg">
+    <View style={{ backgroundColor: "transparent" }}>
       <View
         pointerEvents="box-none"
-        style={{ position: "absolute", right: 10, top: fabTop, zIndex: 30 }}
+        style={{ position: "absolute", right: 12, top: fabTop, zIndex: 50 }}
       >
         <VyzeFab />
       </View>
-      <MiniPlayerTabSpacer />
+      {playingItem ? <MiniPlayer /> : null}
       <View
-        className="flex-row border-t border-white/5 bg-vibx-bg pt-3"
+        className={`flex-row bg-vibx-bg pt-3 ${
+          playingItem ? "" : "border-t border-white/5"
+        }`}
         style={{ paddingBottom: Math.max(insets.bottom, 14) }}
       >
         {state.routes.map(
@@ -203,6 +210,7 @@ export default function TabLayout() {
           options={{
             title: "Library",
             tabBarIcon: LibraryTabIcon,
+            freezeOnBlur: false,
           }}
         />
         <Tabs.Screen

@@ -6,6 +6,7 @@ import {
 } from '@/src/utils/knownArtists';
 import { normalizeTrackLabels } from '@/src/utils/metadata';
 import { compareText } from '@/src/utils/sort';
+import { dedupeSongs } from '@/src/utils/songIdentity';
 
 export const MIN_ARTIST_ALBUM_SONGS = 3;
 
@@ -17,9 +18,10 @@ export type ArtistAlbum = {
 };
 
 export function artistAlbumsFromSongs(songs: Song[], minSongs = MIN_ARTIST_ALBUM_SONGS): ArtistAlbum[] {
+  const unique = dedupeSongs(songs);
   const prepared: { song: Song; artist: string }[] = [];
 
-  for (const song of songs) {
+  for (const song of unique) {
     const artist = normalizeTrackLabels(song.title, song.artist).artist.trim();
     if (!artist || /^unknown artist$/i.test(artist)) continue;
     prepared.push({ song, artist });

@@ -3,12 +3,60 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as DocumentPicker from 'expo-document-picker';
 import * as MediaLibrary from 'expo-media-library/legacy';
 import { getVibxDirectory, VIBX_FOLDER_NAME } from '@/src/services/downloads/libraryDir';
-import { getSongByFilename, getSongByPath, updateSongDuration, upsertSong } from '@/src/services/database';
+import { copySidecarLyrics } from '@/src/services/lyrics/loadLyrics';
+import { getSongByFilename, getSongByPath, getSongs, updateSongDuration, upsertSong } from '@/src/services/database';
 import { createId } from '@/src/utils/id';
 import { normalizeDuration, readFileDuration } from '@/src/utils/audioDuration';
 import { decodeDisplayName, isAudioFilename, resolveTrackMetadata, sanitizeFilename } from '@/src/utils/metadata';
+import { preferSong, songFileKey, songIdentityKey } from '@/src/utils/songIdentity';
 import type { Song } from '@/src/types/music';
 import TrackPlayer from '@rntp/player';
+
+type IdentityIndex = {
+  byIdentity: Map<string, Song>;
+  byFile: Map<string, Song>;
+};
+
+let identityIndex: IdentityIndex | null = null;
+
+function rememberIndexedSong(song: Song) {
+  if (!identityIndex) {
+    identityIndex = { byIdentity: new Map(), byFile: new Map() };
+  }
+  const identity = songIdentityKey(song);
+  if (identity) {
+    const current = identityIndex.byIdentity.get(identity);
+    identityIndex.byIdentity.set(identity, current ? preferSong(current, song) : song);
+  }
+  const file = songFileKey(song);
+  if (file) {
+    const current = identityIndex.byFile.get(file);
+    identityIndex.byFile.set(file, current ? preferSong(current, song) : song);
+  }
+}
+
+export async function primeSongIndex(songs?: Song[]) {
+  const list = songs ?? (await getSongs());
+  identityIndex = { byIdentity: new Map(), byFile: new Map() };
+  for (const song of list) rememberIndexedSong(song);
+}
+
+async function existingDuplicate(filename: string, title?: string, artist?: string): Promise<Song | null> {
+  if (!identityIndex) await primeSongIndex();
+  const file = songFileKey(filename);
+  if (file) {
+    const match = identityIndex?.byFile.get(file);
+    if (match) return match;
+  }
+  if (title) {
+    const identity = songIdentityKey({ title, artist: artist ?? '' });
+    if (identity) {
+      const match = identityIndex?.byIdentity.get(identity);
+      if (match) return match;
+    }
+  }
+  return null;
+}
 
 type IngestOptions = {
   album?: string;
@@ -73,8 +121,10 @@ export async function ingestFile(source: File, options?: IngestOptions): Promise
   }
 
   const filename = sanitizeFilename(rawName || `imported-${Date.now()}.mp3`);
-  const existingByFilename = await getSongByFilename(filename);
+  const existingByFilename =
+    (await existingDuplicate(filename)) ?? (await getSongByFilename(filename));
   if (existingByFilename) {
+    rememberIndexedSong(existingByFilename);
     return refreshExistingDuration(existingByFilename, options?.duration);
   }
 
@@ -92,6 +142,11 @@ export async function ingestFile(source: File, options?: IngestOptions): Promise
         }
       }
       localPath = dest.uri;
+      try {
+        await copySidecarLyrics(source.uri, filename);
+      } catch {
+        // Lyrics stay optional; the player falls back to artwork.
+      }
     } catch {
       localPath = source.uri;
     }
@@ -101,6 +156,7 @@ export async function ingestFile(source: File, options?: IngestOptions): Promise
     (await getSongByPath(localPath)) ??
     (await getSongByPath(source.uri));
   if (existing) {
+    rememberIndexedSong(existing);
     return refreshExistingDuration(existing, options?.duration);
   }
 
@@ -111,6 +167,12 @@ export async function ingestFile(source: File, options?: IngestOptions): Promise
   }
 
   const meta = await resolveTrackMetadata(localPath, filename);
+  const existingByTrack = await existingDuplicate(filename, meta.title, meta.artist);
+  if (existingByTrack) {
+    rememberIndexedSong(existingByTrack);
+    return refreshExistingDuration(existingByTrack, duration);
+  }
+
   const song: Song = {
     id: createId(),
     title: meta.title,
@@ -128,6 +190,7 @@ export async function ingestFile(source: File, options?: IngestOptions): Promise
   };
 
   await upsertSong(song);
+  rememberIndexedSong(song);
 
   if (copy) {
     try {

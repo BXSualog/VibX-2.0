@@ -9,6 +9,8 @@ function accessFile() {
 }
 
 export async function getDownloadsFolderUri(): Promise<string | null> {
+  if (Platform.OS === 'web') return null;
+
   try {
     const file = accessFile();
     if (!file.exists) return null;
@@ -30,6 +32,8 @@ function saveDownloadsFolderUri(uri: string) {
 }
 
 export async function requestDownloadsFolderAccess(): Promise<string | null> {
+  if (Platform.OS === 'web') return null;
+
   if (Platform.OS === 'android') {
     try {
       const initial = StorageAccessFramework.getUriForDirectoryInRoot('Download');

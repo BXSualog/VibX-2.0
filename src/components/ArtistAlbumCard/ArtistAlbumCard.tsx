@@ -12,6 +12,7 @@ type Props = {
   count: number;
   artwork?: string | null;
   size?: number;
+  kind?: 'album' | 'artist';
   onPress?: () => void;
 };
 
@@ -20,6 +21,7 @@ export const ArtistAlbumCard = memo(function ArtistAlbumCard({
   count,
   artwork,
   size = 152,
+  kind = 'album',
   onPress,
 }: Props) {
   const palette = brightCoverPalette(artist, 'album');
@@ -61,7 +63,11 @@ export const ArtistAlbumCard = memo(function ArtistAlbumCard({
         {artist}
       </Text>
       <Text style={styles.subtitle} numberOfLines={1}>
-        Album · {count} {count === 1 ? 'song' : 'songs'}
+        {kind === 'artist'
+          ? count > 0
+            ? `${count.toLocaleString()} fans`
+            : 'Artist'
+          : `Album · ${count} ${count === 1 ? 'song' : 'songs'}`}
       </Text>
     </Pressable>
   );

@@ -1,5 +1,6 @@
 import { EmptyState } from "@/src/components/EmptyState";
 import { MINI_PLAYER_HEIGHT } from "@/src/components/MiniPlayer/MiniPlayer";
+import { MiniPlayerDock } from "@/src/components/MiniPlayer/MiniPlayerDock";
 import { useLibraryStore } from "@/src/stores/libraryStore";
 import { usePlayerStore } from "@/src/stores/playerStore";
 import { useRowHighlight } from "@/src/hooks/useHover";
@@ -109,6 +110,7 @@ export default function AlbumScreen() {
           title="Album not found"
           subtitle="This artist needs at least 3 songs on your device."
         />
+        <MiniPlayerDock />
       </SafeAreaView>
     );
   }
@@ -264,6 +266,7 @@ export default function AlbumScreen() {
           />
         ))}
       </ScrollView>
+      <MiniPlayerDock />
     </SafeAreaView>
   );
 }
@@ -282,7 +285,7 @@ function AlbumTrackRow({
   onPress: (song: Song) => void;
 }) {
   const labels = normalizeTrackLabels(song.title, song.artist);
-  const { highlight, pressProps } = useRowHighlight();
+  const { highlightStyle, pressProps } = useRowHighlight();
 
   return (
     <View collapsable={false}>
@@ -292,32 +295,35 @@ function AlbumTrackRow({
       <Pressable
         {...pressProps}
         onPress={() => onPress(song)}
-        style={[styles.trackPress, highlight]}
+        android_ripple={{ color: "rgba(255,255,255,0.12)" }}
+        accessibilityRole="button"
       >
-        <View style={styles.trackRow}>
-          <View style={styles.indexSlot}>
-            {active && playing ? (
-              <PlayingBars />
-            ) : (
-              <Text style={[styles.index, active && styles.activeText]}>
-                {index + 1}
-              </Text>
-            )}
+        <Animated.View style={[styles.trackPress, highlightStyle]}>
+          <View style={styles.trackRow}>
+            <View style={styles.indexSlot}>
+              {active && playing ? (
+                <PlayingBars />
+              ) : (
+                <Text style={[styles.index, active && styles.activeText]}>
+                  {index + 1}
+                </Text>
+              )}
+            </View>
+            <Text
+              numberOfLines={1}
+              style={[
+                styles.trackTitle,
+                active && styles.activeText,
+                { paddingVertical: 16, lineHeight: 28 },
+              ]}
+            >
+              {labels.title}
+            </Text>
+            <Text style={[styles.duration, active && styles.activeText]}>
+              {song.duration > 0 ? formatTime(song.duration) : "--:--"}
+            </Text>
           </View>
-          <Text
-            numberOfLines={1}
-            style={[
-              styles.trackTitle,
-              active && styles.activeText,
-              { paddingVertical: 16, lineHeight: 28 },
-            ]}
-          >
-            {labels.title}
-          </Text>
-          <Text style={[styles.duration, active && styles.activeText]}>
-            {song.duration > 0 ? formatTime(song.duration) : "--:--"}
-          </Text>
-        </View>
+        </Animated.View>
       </Pressable>
     </View>
   );
@@ -370,6 +376,7 @@ const styles = StyleSheet.create({
   trackPress: {
     marginHorizontal: -12,
     borderRadius: 12,
+    cursor: "pointer",
   },
   trackRow: {
     flexDirection: "row",

@@ -21,7 +21,13 @@ const REMOTE_COMMANDS = {
   },
 };
 
+const SMALL_QUEUE = 36;
+const IMMEDIATE_AHEAD = 18;
+const IMMEDIATE_BEHIND = 1;
+const FILL_BATCH = 64;
+
 let setupPromise: Promise<void> | null = null;
+let playGeneration = 0;
 
 function applyRemoteCommands() {
   TrackPlayer.setCommands(REMOTE_COMMANDS);
@@ -29,16 +35,101 @@ function applyRemoteCommands() {
 
 export function songToMediaItem(song: Song): MediaItem {
   const labels = normalizeTrackLabels(song.title, song.artist);
+  const preview = !song.isDownloaded && song.previewUrl;
   return {
     mediaId: song.id,
-    url: song.localPath,
+    url: preview ? song.previewUrl! : song.localPath,
     title: labels.title,
     artist: labels.artist,
     albumTitle: song.album,
     artworkUrl: song.artwork ?? undefined,
-    duration: song.duration || undefined,
-    extras: { songId: song.id },
+    duration: preview
+      ? song.previewDuration || 30
+      : song.duration || undefined,
+    extras: { songId: song.id, preview: preview ? '1' : '0' },
   };
+}
+
+function toMediaItems(songs: Song[]): MediaItem[] {
+  const items = new Array<MediaItem>(songs.length);
+  for (let index = 0; index < songs.length; index += 1) {
+    items[index] = songToMediaItem(songs[index]);
+  }
+  return items;
+}
+
+function afterPaint(work: () => void) {
+  requestAnimationFrame(() => {
+    setTimeout(work, 0);
+  });
+}
+
+function addInBatches(token: number, songs: Song[], done: () => void) {
+  let offset = 0;
+  const step = () => {
+    if (token !== playGeneration) return;
+    if (offset >= songs.length) {
+      done();
+      return;
+    }
+    const chunk = songs.slice(offset, offset + FILL_BATCH);
+    offset += chunk.length;
+    TrackPlayer.addMediaItems(toMediaItems(chunk));
+    if (offset >= songs.length) {
+      done();
+      return;
+    }
+    setTimeout(step, 16);
+  };
+  step();
+}
+
+function insertBeforeInBatches(token: number, songs: Song[], done: () => void) {
+  let remaining = songs.length;
+  const step = () => {
+    if (token !== playGeneration) return;
+    if (remaining <= 0) {
+      done();
+      return;
+    }
+    const start = Math.max(0, remaining - FILL_BATCH);
+    const chunk = songs.slice(start, remaining);
+    remaining = start;
+    TrackPlayer.insertMediaItems(0, toMediaItems(chunk));
+    if (remaining <= 0) {
+      done();
+      return;
+    }
+    setTimeout(step, 16);
+  };
+  step();
+}
+
+function fillQueueLater(
+  token: number,
+  before: Song[],
+  after: Song[],
+  shuffle: boolean
+) {
+  const finish = () => {
+    if (token !== playGeneration) return;
+    TrackPlayer.setShuffleEnabled(shuffle);
+  };
+
+  const insertBefore = () => {
+    if (token !== playGeneration) return;
+    if (before.length === 0) {
+      finish();
+      return;
+    }
+    insertBeforeInBatches(token, before, finish);
+  };
+
+  if (after.length === 0) {
+    insertBefore();
+    return;
+  }
+  addInBatches(token, after, insertBefore);
 }
 
 export async function setupTrackPlayer(): Promise<void> {
@@ -73,13 +164,33 @@ export async function setupTrackPlayer(): Promise<void> {
 
 export function playQueue(songs: Song[], startIndex = 0, shuffle = false, repeat: RepeatModeName = 'off') {
   if (songs.length === 0) return;
+  const index = Math.max(0, Math.min(startIndex, songs.length - 1));
+  const token = ++playGeneration;
+
   applyRemoteCommands();
   TrackPlayer.setShuffleEnabled(false);
-  TrackPlayer.clear();
-  TrackPlayer.setMediaItems(songs.map(songToMediaItem), Math.max(0, startIndex));
-  TrackPlayer.setShuffleEnabled(shuffle);
   TrackPlayer.setRepeatMode(toRepeatMode(repeat));
+
+  if (songs.length <= SMALL_QUEUE) {
+    TrackPlayer.setMediaItems(toMediaItems(songs), index);
+    TrackPlayer.setShuffleEnabled(shuffle);
+    TrackPlayer.play();
+    return;
+  }
+
+  const from = Math.max(0, index - IMMEDIATE_BEHIND);
+  const to = Math.min(songs.length, index + 1 + IMMEDIATE_AHEAD);
+  TrackPlayer.setMediaItems(toMediaItems(songs.slice(from, to)), index - from);
   TrackPlayer.play();
+
+  const after = songs.slice(to);
+  const before = songs.slice(0, from);
+  if (after.length === 0 && before.length === 0 && !shuffle) return;
+
+  afterPaint(() => {
+    if (token !== playGeneration) return;
+    fillQueueLater(token, before, after, shuffle);
+  });
 }
 
 export function toRepeatMode(mode: RepeatModeName): RepeatMode {

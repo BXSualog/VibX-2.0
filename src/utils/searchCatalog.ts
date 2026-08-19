@@ -1,5 +1,6 @@
 import type { Playlist, Song } from '@/src/types/music';
 import { MIN_ARTIST_ALBUM_SONGS, type ArtistAlbum } from '@/src/utils/artistAlbums';
+import { dedupeSongs } from '@/src/utils/songIdentity';
 
 export type NamedAlbum = {
   album: string;
@@ -26,12 +27,13 @@ function includesQuery(value: string, query: string): boolean {
 }
 
 export function getSearchCatalog(songs: Song[], playlists: Playlist[]): SearchCatalog {
-  if (cache && cache.songs === songs && cache.playlists === playlists) return cache.catalog;
+  const unique = dedupeSongs(songs);
+  if (cache && cache.songs === unique && cache.playlists === playlists) return cache.catalog;
 
   const named = new Map<string, NamedAlbum>();
   const artists = new Map<string, ArtistAlbum>();
 
-  for (const song of songs) {
+  for (const song of unique) {
     const albumName = song.album.trim();
     const artistName = song.artist.trim();
 
@@ -70,12 +72,12 @@ export function getSearchCatalog(songs: Song[], playlists: Playlist[]): SearchCa
   }
 
   const catalog: SearchCatalog = {
-    songs,
+    songs: unique,
     namedAlbums: [...named.values()],
     artistAlbums: [...artists.values()].filter((album) => album.songs.length >= MIN_ARTIST_ALBUM_SONGS),
     playlists,
   };
-  cache = { songs, playlists, catalog };
+  cache = { songs: unique, playlists, catalog };
   return catalog;
 }
 

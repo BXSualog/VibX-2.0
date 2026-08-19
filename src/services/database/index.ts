@@ -2,6 +2,7 @@ import * as SQLite from 'expo-sqlite';
 import { createId } from '@/src/utils/id';
 import { VIBED_PLAYLIST_ID } from '@/src/constants/playlists';
 import type { Playlist, Song } from '@/src/types/music';
+import { dedupeSongs, duplicateGroups, preferSong } from '@/src/utils/songIdentity';
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
@@ -124,6 +125,9 @@ export async function upsertSong(song: Song): Promise<void> {
        localPath=excluded.localPath,
        duration=excluded.duration,
        artwork=excluded.artwork,
+       previewUrl=excluded.previewUrl,
+       downloadUrl=excluded.downloadUrl,
+       previewDuration=excluded.previewDuration,
        isDownloaded=excluded.isDownloaded`,
     [
       song.id,
@@ -196,6 +200,85 @@ export async function deleteSong(id: string): Promise<void> {
   await db.runAsync('DELETE FROM songs WHERE id = ?', [id]);
 }
 
+export async function mergeDuplicateSongs(): Promise<Song[]> {
+  const songs = await getSongs();
+  const extras: Song[] = [];
+
+  for (const group of duplicateGroups(songs)) {
+    const keep = group.reduce(preferSong);
+    for (const song of group) {
+      if (song.id !== keep.id) extras.push(song);
+    }
+
+    const db = await getDb();
+    for (const extra of group) {
+      if (extra.id === keep.id) continue;
+      await db.runAsync(
+        'INSERT OR IGNORE INTO favorites (songId) SELECT ? WHERE EXISTS (SELECT 1 FROM favorites WHERE songId = ?)',
+        [keep.id, extra.id]
+      );
+      await db.runAsync(
+        `INSERT OR IGNORE INTO playlist_songs (playlistId, songId, position)
+         SELECT playlistId, ?, position FROM playlist_songs WHERE songId = ?`,
+        [keep.id, extra.id]
+      );
+
+      const extraRecent = await db.getFirstAsync<{ playedAt: number }>(
+        'SELECT playedAt FROM recent WHERE songId = ?',
+        [extra.id]
+      );
+      if (extraRecent) {
+        await db.runAsync(
+          `INSERT INTO recent (songId, playedAt) VALUES (?, ?)
+           ON CONFLICT(songId) DO UPDATE SET playedAt = MAX(playedAt, excluded.playedAt)`,
+          [keep.id, extraRecent.playedAt]
+        );
+      }
+
+      const extraStats = await db.getFirstAsync<{ completedCount: number; lastCompletedAt: number | null }>(
+        'SELECT completedCount, lastCompletedAt FROM play_stats WHERE songId = ?',
+        [extra.id]
+      );
+      if (extraStats) {
+        const keepStats = await db.getFirstAsync<{ completedCount: number; lastCompletedAt: number | null }>(
+          'SELECT completedCount, lastCompletedAt FROM play_stats WHERE songId = ?',
+          [keep.id]
+        );
+        if (keepStats) {
+          await db.runAsync(
+            `UPDATE play_stats
+             SET completedCount = completedCount + ?,
+                 lastCompletedAt = CASE
+                   WHEN lastCompletedAt IS NULL THEN ?
+                   WHEN ? IS NULL THEN lastCompletedAt
+                   WHEN ? > lastCompletedAt THEN ?
+                   ELSE lastCompletedAt
+                 END
+             WHERE songId = ?`,
+            [
+              extraStats.completedCount,
+              extraStats.lastCompletedAt,
+              extraStats.lastCompletedAt,
+              extraStats.lastCompletedAt,
+              extraStats.lastCompletedAt,
+              keep.id,
+            ]
+          );
+        } else {
+          await db.runAsync(
+            'INSERT INTO play_stats (songId, completedCount, lastCompletedAt) VALUES (?, ?, ?)',
+            [keep.id, extraStats.completedCount, extraStats.lastCompletedAt]
+          );
+        }
+      }
+
+      await db.runAsync('DELETE FROM songs WHERE id = ?', [extra.id]);
+    }
+  }
+
+  return extras;
+}
+
 export async function getFavorites(): Promise<Song[]> {
   const db = await getDb();
   return db.getAllAsync<Song>(
@@ -226,6 +309,8 @@ export async function toggleFavorite(songId: string): Promise<boolean> {
 
 export async function recordPlay(songId: string): Promise<void> {
   const db = await getDb();
+  const exists = await db.getFirstAsync<{ id: string }>('SELECT id FROM songs WHERE id = ?', [songId]);
+  if (!exists) return;
   await db.runAsync(
     `INSERT INTO recent (songId, playedAt) VALUES (?, ?)
      ON CONFLICT(songId) DO UPDATE SET playedAt=excluded.playedAt`,
@@ -246,6 +331,8 @@ export async function getRecent(limit = 20): Promise<Song[]> {
 
 export async function recordCompletedPlay(songId: string): Promise<void> {
   const db = await getDb();
+  const exists = await db.getFirstAsync<{ id: string }>('SELECT id FROM songs WHERE id = ?', [songId]);
+  if (!exists) return;
   await db.runAsync(
     `INSERT INTO play_stats (songId, completedCount, lastCompletedAt) VALUES (?, 1, ?)
      ON CONFLICT(songId) DO UPDATE SET
@@ -347,13 +434,14 @@ export async function addSongToPlaylist(playlistId: string, songId: string): Pro
 
 export async function getPlaylistSongs(playlistId: string): Promise<Song[]> {
   const db = await getDb();
-  return db.getAllAsync<Song>(
+  const songs = await db.getAllAsync<Song>(
     `SELECT s.* FROM songs s
      INNER JOIN playlist_songs ps ON ps.songId = s.id
      WHERE ps.playlistId = ?
      ORDER BY ps.position`,
     [playlistId]
   );
+  return dedupeSongs(songs);
 }
 
 export async function getAlbums(): Promise<{ album: string; artist: string; count: number }[]> {

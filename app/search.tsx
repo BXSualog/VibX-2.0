@@ -12,6 +12,7 @@ import { SectionHeader } from '@/src/components/SectionHeader';
 import { EmptyState } from '@/src/components/EmptyState';
 import { SongContextMenu } from '@/src/components/SongContextMenu';
 import { MINI_PLAYER_HEIGHT } from '@/src/components/MiniPlayer/MiniPlayer';
+import { MiniPlayerDock } from '@/src/components/MiniPlayer/MiniPlayerDock';
 import { useActiveMediaItem, useIsPlaying } from '@rntp/player';
 import { useLibraryStore } from '@/src/stores/libraryStore';
 import { usePlayerStore } from '@/src/stores/playerStore';
@@ -74,8 +75,8 @@ export default function SearchScreen() {
   const hasAlbumResults = namedAlbumResults.length > 0 || artistAlbumResults.length > 0;
   const hasResults =
     songResults.length > 0 || hasAlbumResults || playlistResults.length > 0;
-  const recentSongs = recent.slice(0, 7);
-  const popularSongs = popular.slice(0, 8);
+  const recentSongs = recent.filter((song) => song?.id).slice(0, 7);
+  const popularSongs = popular.filter((song) => song?.id).slice(0, 8);
   const recommendedAlbums = useMemo(() => {
     if (!catalog) return [];
     const albums =
@@ -339,6 +340,7 @@ export default function SearchScreen() {
         )}
       </ScrollView>
       <SongContextMenu song={selected} onClose={() => setSelected(null)} />
+      <MiniPlayerDock />
     </SafeAreaView>
   );
 }

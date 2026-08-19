@@ -4,31 +4,40 @@ import type { Song } from '@/src/types/music';
 import { Artwork } from '@/src/components/Artwork';
 import { useLibraryStore } from '@/src/stores/libraryStore';
 import { usePlayerStore } from '@/src/stores/playerStore';
+import { useDownloadStore } from '@/src/stores/downloadStore';
 import { colors } from '@/src/theme/colors';
 import { VIBED_PLAYLIST_ID } from '@/src/constants/playlists';
 import { normalizeTrackLabels } from '@/src/utils/metadata';
+import { isCatalogSong, isPreviewSong } from '@/src/utils/catalog';
 
 type Props = {
   song: Song | null;
   onClose: () => void;
+  queue?: Song[];
 };
 
-export function SongContextMenu({ song, onClose }: Props) {
+export function SongContextMenu({ song, onClose, queue }: Props) {
   const playlists = useLibraryStore((state) => state.playlists);
+  const librarySongs = useLibraryStore((state) => state.songs);
   const createPlaylist = useLibraryStore((state) => state.createPlaylist);
   const addToPlaylist = useLibraryStore((state) => state.addToPlaylist);
-  const removeSong = useLibraryStore((state) => state.removeSong);
   const toggleFavorite = useLibraryStore((state) => state.toggleFavorite);
   const isFavorite = useLibraryStore((state) => state.isFavorite);
   const playNext = usePlayerStore((state) => state.playNext);
   const addToQueue = usePlayerStore((state) => state.addToQueue);
   const playSong = usePlayerStore((state) => state.playSong);
-  const songs = useLibraryStore((state) => state.songs);
+  const downloadSong = useDownloadStore((state) => state.downloadSong);
+  const removeCatalogDownload = useDownloadStore((state) => state.removeCatalogDownload);
+  const job = useDownloadStore((state) => (song ? state.jobs[song.id] : undefined));
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState('');
 
   if (!song) return null;
   const labels = normalizeTrackLabels(song.title, song.artist);
+  const saved = librarySongs.some((item) => item.id === song.id);
+  const catalog = isCatalogSong(song);
+  const preview = isPreviewSong(song) && !saved;
+  const downloading = job?.status === 'queued' || job?.status === 'downloading';
 
   async function run(label: string, fn: () => void | Promise<void>) {
     await fn();
@@ -50,47 +59,95 @@ export function SongContextMenu({ song, onClose }: Props) {
               </Text>
               <Text className="text-sm text-vibx-muted" numberOfLines={1}>
                 {labels.artist}
+                {preview ? ' · Preview' : saved ? ' · In library' : ''}
               </Text>
             </View>
           </View>
 
-          <MenuItem label="Play" onPress={() => run('play', () => playSong(song, songs))} />
+          <MenuItem
+            label="Play"
+            onPress={() => run('play', () => playSong(song, queue ?? (saved ? librarySongs : [song])))}
+          />
           <MenuItem label="Play Next" onPress={() => run('next', () => playNext(song))} />
-          <MenuItem label="Add to Queue" onPress={() => run('queue', () => addToQueue(song))} />
-          <MenuItem
-            label={isFavorite(song.id) ? 'Remove from Vibed' : 'Add to Vibed'}
-            onPress={() =>
-              run('fav', async () => {
-                await toggleFavorite(song.id);
-              })
-            }
-          />
-          {playlists
-            .filter((playlist) => playlist.id !== VIBED_PLAYLIST_ID)
-            .map((playlist) => (
-            <MenuItem
-              key={playlist.id}
-              label={`Add to ${playlist.name}`}
-              onPress={() => run('pl', () => addToPlaylist(playlist.id, song.id))}
-            />
-          ))}
-          <MenuItem label="New Playlist" onPress={() => setNaming(true)} />
-          <MenuItem
-            label="Remove Download"
-            danger
-            onPress={() =>
-              Alert.alert('Remove download?', labels.title, [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Remove',
-                  style: 'destructive',
-                  onPress: () => run('del', () => removeSong(song)),
-                },
-              ])
-            }
-          />
+          {saved ? (
+            <MenuItem label="Add to Queue" onPress={() => run('queue', () => addToQueue(song))} />
+          ) : null}
 
-          {naming ? (
+          {catalog ? (
+            saved ? (
+              <MenuItem
+                label="Remove Download"
+                danger
+                onPress={() =>
+                  Alert.alert('Remove download?', labels.title, [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                      text: 'Remove',
+                      style: 'destructive',
+                      onPress: () => run('del', () => removeCatalogDownload(song)),
+                    },
+                  ])
+                }
+              />
+            ) : (
+              <MenuItem
+                label={downloading ? 'Downloading…' : 'Download'}
+                onPress={() => {
+                  onClose();
+                  void (async () => {
+                    const ok = await downloadSong(song);
+                    if (!ok && !song.downloadUrl) {
+                      Alert.alert(
+                        'Full track not available',
+                        'Deezer only provides a 30-second preview. VibX will not save that clip as the full song.',
+                      );
+                    }
+                  })();
+                }}
+              />
+            )
+          ) : (
+            <MenuItem
+              label="Remove Download"
+              danger
+              onPress={() =>
+                Alert.alert('Remove download?', labels.title, [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Remove',
+                    style: 'destructive',
+                    onPress: () =>
+                      run('del', () => useLibraryStore.getState().removeSong(song)),
+                  },
+                ])
+              }
+            />
+          )}
+
+          {saved ? (
+            <>
+              <MenuItem
+                label={isFavorite(song.id) ? 'Remove from Vibed' : 'Add to Vibed'}
+                onPress={() =>
+                  run('fav', async () => {
+                    await toggleFavorite(song.id);
+                  })
+                }
+              />
+              {playlists
+                .filter((playlist) => playlist.id !== VIBED_PLAYLIST_ID)
+                .map((playlist) => (
+                  <MenuItem
+                    key={playlist.id}
+                    label={`Add to ${playlist.name}`}
+                    onPress={() => run('pl', () => addToPlaylist(playlist.id, song.id))}
+                  />
+                ))}
+              <MenuItem label="New Playlist" onPress={() => setNaming(true)} />
+            </>
+          ) : null}
+
+          {naming && saved ? (
             <View className="mt-3">
               <TextInput
                 value={name}

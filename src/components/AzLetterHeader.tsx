@@ -2,7 +2,7 @@ import { memo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { colors } from '@/src/theme/colors';
 
-export const AZ_LETTER_HEADER_HEIGHT = 48;
+export const AZ_LETTER_HEADER_HEIGHT = 56;
 
 export const AzLetterHeader = memo(function AzLetterHeader({ letter }: { letter: string }) {
   return (
@@ -17,8 +17,9 @@ const styles = StyleSheet.create({
   wrap: {
     height: AZ_LETTER_HEADER_HEIGHT,
     justifyContent: 'flex-end',
-    paddingHorizontal: 20,
-    paddingBottom: 8,
+    paddingHorizontal: 22,
+    paddingTop: 16,
+    paddingBottom: 10,
     backgroundColor: colors.background,
   },
   letter: {

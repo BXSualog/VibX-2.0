@@ -4,11 +4,13 @@ import { router, usePathname } from 'expo-router';
 import TrackPlayer, { Event, useIsPlaying } from '@rntp/player';
 import { setupTrackPlayer } from '@/src/services/audio/player';
 import { bindRemoteSkipListeners } from '@/src/services/audio/playbackService';
+import { resolveSongById } from '@/src/stores/catalogStore';
 import { useLibraryStore } from '@/src/stores/libraryStore';
 import { useDownloadStore } from '@/src/stores/downloadStore';
 import { usePlayerStore } from '@/src/stores/playerStore';
 import { artistAlbumForSongs } from '@/src/utils/artistAlbums';
 import { notePlaybackProgress, noteTrackChange } from '@/src/services/audio/playStats';
+import { usePreviewPlaybackGuard } from '@/src/hooks/usePreviewPlaybackGuard';
 import type { Song } from '@/src/types/music';
 
 function scheduleAfterUiIdle(work: () => void | Promise<void>, delayMs: number): () => void {
@@ -54,6 +56,7 @@ export function useBootstrap() {
   const pathnameRef = useRef(pathname);
   pathnameRef.current = pathname;
   const nativePlaying = useIsPlaying();
+  usePreviewPlaybackGuard();
 
   useEffect(() => {
     usePlayerStore.getState().syncPlaying(nativePlaying);
@@ -79,6 +82,9 @@ export function useBootstrap() {
         if (!cancelled) openAlbumForNewSongs(added, pathnameRef.current);
       }, 500);
       cancelMaintenance = scheduleAfterUiIdle(runMaintenance, 2500);
+      scheduleAfterUiIdle(() => {
+        router.prefetch('/library');
+      }, 400);
     }
 
     void start();
@@ -110,10 +116,15 @@ export function useBootstrap() {
 
   useEffect(() => {
     const playSub = TrackPlayer.addEventListener(Event.MediaItemTransition, ({ item }) => {
-      const songId = item?.mediaId ?? (item?.extras?.songId as string | undefined);
+      const native = item ?? TrackPlayer.getActiveMediaItem?.();
+      const songId = native?.mediaId ?? (native?.extras?.songId as string | undefined);
       const finishedId = noteTrackChange(songId ?? null);
       if (finishedId) void useLibraryStore.getState().recordCompletedPlay(finishedId);
       if (songId) void useLibraryStore.getState().recordPlay(songId);
+      usePlayerStore.getState().syncCurrentSong(resolveSongById(songId) ?? null);
+    });
+    const queueSub = TrackPlayer.addEventListener(Event.QueueChanged, () => {
+      usePlayerStore.getState().syncCurrentSong();
     });
     const progressSub = TrackPlayer.addEventListener(Event.PlaybackProgressUpdated, ({ mediaId, position, duration }) => {
       const finishedId = notePlaybackProgress(mediaId, position, duration);
@@ -125,6 +136,7 @@ export function useBootstrap() {
     const unbindRemote = bindRemoteSkipListeners();
     return () => {
       playSub.remove();
+      queueSub.remove();
       progressSub.remove();
       unbindRemote();
     };

@@ -39,12 +39,13 @@ export default function HomeScreen() {
   const continueLabels = continueListening
     ? normalizeTrackLabels(continueListening.title, continueListening.artist)
     : null;
-  const recentSongs = recent.slice(0, 8);
+  const recentSongs = recent.filter((song) => song?.id).slice(0, 8);
   const artistAlbums = useMemo(() => artistAlbumsFromSongs(songs), [songs]);
 
   useEffect(() => {
     const task = InteractionManager.runAfterInteractions(() => {
       router.prefetch('/search');
+      router.prefetch('/browse');
       getSearchCatalog(songs, playlists);
     });
     return () => task.cancel();
@@ -70,7 +71,7 @@ export default function HomeScreen() {
         style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 240 }}
       />
 
-      <ScrollView className="flex-1" contentContainerClassName="pb-16" keyboardShouldPersistTaps="handled">
+      <ScrollView className="flex-1" contentContainerClassName="pb-28" keyboardShouldPersistTaps="handled">
         <View className="px-5 pt-3">
           <Text className="text-sm font-medium text-vibx-muted">{greetingForNow()}</Text>
           <Text className="mt-0.5 text-[34px] font-bold tracking-tight text-vibx-text">
@@ -82,6 +83,41 @@ export default function HomeScreen() {
             requestAnimationFrame(() => router.push('/search'));
           }}
         />
+        <Pressable
+          onPress={() => {
+            requestAnimationFrame(() => router.push('/browse'));
+          }}
+          className="mx-5 mt-4 overflow-hidden rounded-3xl bg-vibx-surface active:opacity-90"
+        >
+          <LinearGradient
+            colors={['#1D4ED8', '#111827']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={{ flexDirection: 'row', alignItems: 'center', padding: 16 }}
+          >
+            <View className="h-12 w-12 items-center justify-center rounded-2xl bg-white/10">
+              <SymbolView
+                name={{ ios: 'globe.americas.fill', android: 'public', web: 'public' }}
+                tintColor={colors.accent}
+                size={24}
+              />
+            </View>
+            <View className="ml-3.5 flex-1">
+              <Text className="text-xs font-semibold uppercase tracking-widest text-vibx-accent">
+                Online mode
+              </Text>
+              <Text className="mt-1 text-lg font-bold text-vibx-text">Browse catalog</Text>
+              <Text className="text-sm text-vibx-muted" numberOfLines={1}>
+                Discover songs and stream 30-second previews
+              </Text>
+            </View>
+            <SymbolView
+              name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
+              tintColor={colors.muted}
+              size={18}
+            />
+          </LinearGradient>
+        </Pressable>
         <VyzeHeader />
 
         {continueListening && continueLabels ? (
@@ -89,7 +125,7 @@ export default function HomeScreen() {
             <SectionHeader title="Continue Listening" />
             <Pressable
               onPress={() => playSong(continueListening, songs)}
-              className="mx-5 overflow-hidden rounded-3xl bg-vibx-surface"
+              className="mx-5 overflow-hidden rounded-3xl bg-vibx-surface hover:opacity-90 active:opacity-90"
             >
               <LinearGradient
                 colors={['#1E3A8A', '#111827']}

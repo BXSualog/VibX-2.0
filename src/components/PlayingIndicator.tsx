@@ -13,15 +13,21 @@ import { colors } from '@/src/theme/colors';
 
 const BAR_PEAKS = [0.48, 1, 0.64, 0.86];
 
+export const SoundWave = memo(function SoundWave() {
+  return (
+    <View style={styles.wave}>
+      {BAR_PEAKS.map((peak, index) => (
+        <WaveBar key={index} index={index} peak={peak} />
+      ))}
+    </View>
+  );
+});
+
 export const PlayingIndicator = memo(function PlayingIndicator() {
   return (
     <View style={styles.row}>
       <Text style={styles.label}>Playing</Text>
-      <View style={styles.wave}>
-        {BAR_PEAKS.map((peak, index) => (
-          <WaveBar key={index} index={index} peak={peak} />
-        ))}
-      </View>
+      <SoundWave />
     </View>
   );
 });

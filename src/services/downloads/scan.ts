@@ -3,7 +3,7 @@ import { StorageAccessFramework } from 'expo-file-system/legacy';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 import * as MediaLibrary from 'expo-media-library/legacy';
-import { ingestFile } from '@/src/services/downloads/import';
+import { ingestFile, primeSongIndex } from '@/src/services/downloads/import';
 import { getDownloadsFolderUri } from '@/src/services/downloads/permissions';
 import { isMp3Filename } from '@/src/utils/metadata';
 import type { Song } from '@/src/types/music';
@@ -237,6 +237,7 @@ export async function scanDownloadsFolder(
 ): Promise<Song[]> {
   const seen = new Set<string>();
   const imported: Song[] = [];
+  await primeSongIndex();
 
   const pathSongs = await scanKnownDownloadPaths(seen, options?.quick);
   imported.push(...pathSongs);

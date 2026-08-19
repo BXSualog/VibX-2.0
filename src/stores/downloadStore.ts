@@ -6,20 +6,46 @@ import {
   getDownloadsFolderUri,
   requestDownloadsFolderAccess,
 } from '@/src/services/downloads/permissions';
+import {
+  CatalogDownloadUnavailableError,
+  downloadAuthorizedTrack,
+} from '@/src/services/downloads/catalogDownload';
 import { useLibraryStore } from '@/src/stores/libraryStore';
+import { useCatalogStore } from '@/src/stores/catalogStore';
+import { usePlayerStore } from '@/src/stores/playerStore';
+import type { DownloadJob } from '@/src/types/catalog';
 import type { Song } from '@/src/types/music';
+import { isCatalogSongId } from '@/src/utils/catalog';
+
+const controllers = new Map<string, AbortController>();
+
+function patchJob(
+  set: (partial: Partial<DownloadState>) => void,
+  get: () => DownloadState,
+  songId: string,
+  patch: Partial<DownloadJob>,
+) {
+  const current = get().jobs[songId];
+  if (!current) return;
+  set({ jobs: { ...get().jobs, [songId]: { ...current, ...patch } } });
+}
 
 type DownloadState = {
   busy: boolean;
   message: string | null;
   storageBytes: number;
   downloadsAccess: boolean;
+  jobs: Record<string, DownloadJob>;
   refreshStorage: () => void;
   refreshAccess: () => Promise<void>;
   requestDownloadsAccess: () => Promise<boolean>;
   importFiles: () => Promise<number>;
   scanDevice: () => Promise<number>;
   syncDownloads: () => Promise<Song[]>;
+  downloadSong: (song: Song) => Promise<boolean>;
+  cancelDownload: (songId: string) => void;
+  dismissJob: (songId: string) => void;
+  removeCatalogDownload: (song: Song) => Promise<void>;
 };
 
 let scanQueue: Promise<void> = Promise.resolve();
@@ -38,6 +64,7 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
   message: null,
   storageBytes: 0,
   downloadsAccess: false,
+  jobs: {},
   refreshStorage: () => {
     try {
       set({ storageBytes: getLibraryStorageBytes() });
@@ -152,5 +179,87 @@ export const useDownloadStore = create<DownloadState>((set, get) => ({
         return [];
       }
     });
+  },
+  downloadSong: async (song) => {
+    const existing = get().jobs[song.id];
+    if (existing?.status === 'queued' || existing?.status === 'downloading') {
+      return false;
+    }
+
+    const sourceUrl = song.downloadUrl;
+    const job: DownloadJob = {
+      songId: song.id,
+      title: song.title,
+      artist: song.artist,
+      artwork: song.artwork,
+      progress: 0,
+      status: sourceUrl ? 'queued' : 'unavailable',
+      error: sourceUrl
+        ? undefined
+        : 'A full authorized file is not available for this track',
+    };
+    set({ jobs: { ...get().jobs, [song.id]: job } });
+
+    if (!sourceUrl) {
+      set({
+        message: 'Deezer only provides a 30-second preview. A full file is not available to save.',
+      });
+      return false;
+    }
+
+    const controller = new AbortController();
+    controllers.set(song.id, controller);
+    patchJob(set, get, song.id, { status: 'downloading', progress: 0.02 });
+
+    try {
+      const downloaded = await downloadAuthorizedTrack(
+        song,
+        (ratio) => patchJob(set, get, song.id, { progress: ratio, status: 'downloading' }),
+        controller.signal,
+      );
+      useCatalogStore.getState().remember([downloaded]);
+      await useLibraryStore.getState().refresh();
+      get().refreshStorage();
+      patchJob(set, get, song.id, { status: 'done', progress: 1, error: undefined });
+      set({ message: `Saved ${downloaded.title} to Downloads/VibX` });
+      usePlayerStore.getState().replaceIfPlaying(downloaded);
+      return true;
+    } catch (error) {
+      if (controller.signal.aborted) {
+        const { [song.id]: _removed, ...rest } = get().jobs;
+        set({ jobs: rest });
+        return false;
+      }
+      const unavailable = error instanceof CatalogDownloadUnavailableError;
+      patchJob(set, get, song.id, {
+        status: unavailable ? 'unavailable' : 'error',
+        error: error instanceof Error ? error.message : 'Download failed',
+      });
+      set({
+        message: error instanceof Error ? error.message : 'Download failed',
+      });
+      return false;
+    } finally {
+      controllers.delete(song.id);
+    }
+  },
+  cancelDownload: (songId) => {
+    controllers.get(songId)?.abort();
+    controllers.delete(songId);
+    const { [songId]: _removed, ...rest } = get().jobs;
+    set({ jobs: rest });
+  },
+  dismissJob: (songId) => {
+    controllers.get(songId)?.abort();
+    controllers.delete(songId);
+    const { [songId]: _removed, ...rest } = get().jobs;
+    set({ jobs: rest });
+  },
+  removeCatalogDownload: async (song) => {
+    if (!isCatalogSongId(song.id)) return;
+    await useLibraryStore.getState().removeSong(song);
+    const { [song.id]: _removed, ...rest } = get().jobs;
+    set({ jobs: rest, message: `Removed ${song.title}` });
+    get().refreshStorage();
   },
 }));

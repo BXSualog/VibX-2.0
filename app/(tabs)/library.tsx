@@ -21,6 +21,7 @@ import {
     clusteredArtistName,
 } from "@/src/utils/knownArtists";
 import { normalizeTrackLabels } from "@/src/utils/metadata";
+import { getLibraryCatalog } from "@/src/utils/libraryCatalog";
 import {
     compareText,
     flattenAzItems,
@@ -42,6 +43,7 @@ import {
     useWindowDimensions,
     type LayoutChangeEvent,
 } from "react-native";
+import Animated from "react-native-reanimated";
 import {
     SafeAreaView,
     useSafeAreaInsets,
@@ -71,8 +73,11 @@ type AlbumListRow =
   | { type: "letter"; key: string; letter: string }
   | { type: "pair"; key: string; left: AlbumRow; right?: AlbumRow };
 
-const ARTIST_ROW_HEIGHT = 76;
+const ARTIST_ARTWORK_SIZE = 56;
+const ARTIST_ROW_PADDING_Y = 12;
+const ARTIST_ROW_HEIGHT = ARTIST_ARTWORK_SIZE + ARTIST_ROW_PADDING_Y * 2;
 const ALBUM_META_HEIGHT = 70;
+const ALBUM_ROW_GAP = 16;
 
 function VibedEmpty() {
   return (
@@ -122,7 +127,7 @@ export default function LibraryScreen() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const albumSize = Math.floor((width - 54) / 2) - 8;
-  const albumRowHeight = albumSize + ALBUM_META_HEIGHT;
+  const albumRowHeight = albumSize + ALBUM_META_HEIGHT + ALBUM_ROW_GAP;
   const songs = useLibraryStore((state) => state.songs);
   const favorites = useLibraryStore((state) => state.favorites);
   const playlists = useLibraryStore((state) => state.playlists);
@@ -135,37 +140,11 @@ export default function LibraryScreen() {
     {},
   );
 
-  const preparedSongs = useMemo(
-    () =>
-      songs.map((song) => ({
-        song,
-        labels: normalizeTrackLabels(song.title, song.artist),
-      })),
-    [songs],
-  );
-  const labelsById = useMemo(
-    () => new Map(preparedSongs.map(({ song, labels }) => [song.id, labels])),
-    [preparedSongs],
-  );
-  const canonicalMap = useMemo(
-    () =>
-      filter === "Albums" || filter === "Artists"
-        ? buildArtistCanonicalMap(preparedSongs.map(({ labels }) => labels.artist))
-        : new Map<string, string>(),
-    [filter, preparedSongs],
-  );
+  const catalog = useMemo(() => getLibraryCatalog(songs), [songs]);
+  const labelsById = catalog.labelsById;
 
-  const sortedSongs = useMemo(() => {
-    const list = [...songs];
-    if (sort === "recent")
-      return list.sort((a, b) => b.createdAt - a.createdAt);
-    return list.sort((a, b) =>
-      compareText(
-        labelsById.get(a.id)?.title ?? a.title,
-        labelsById.get(b.id)?.title ?? b.title,
-      ),
-    );
-  }, [labelsById, songs, sort]);
+  const sortedSongs =
+    sort === "recent" ? catalog.recentSongs : catalog.azSongs;
 
   const sortedFavorites = useMemo(() => {
     if (filter !== "Vibed") return [];
@@ -179,6 +158,21 @@ export default function LibraryScreen() {
       ),
     );
   }, [favorites, filter, labelsById, sort]);
+
+  const preparedSongs = useMemo(() => {
+    if (filter !== "Albums" && filter !== "Artists") return [];
+    return catalog.labeled.map(({ song, title, artist }) => ({
+      song,
+      labels: { title, artist },
+    }));
+  }, [catalog, filter]);
+  const canonicalMap = useMemo(
+    () =>
+      filter === "Albums" || filter === "Artists"
+        ? buildArtistCanonicalMap(preparedSongs.map(({ labels }) => labels.artist))
+        : new Map<string, string>(),
+    [filter, preparedSongs],
+  );
 
   const albums = useMemo(() => {
     if (filter !== "Albums") return [];
@@ -307,30 +301,29 @@ export default function LibraryScreen() {
   const onPlayAlbum = useCallback(
     (album: AlbumRow) => {
       const items = sortedSongs.filter((song) => {
-        const labels = normalizeTrackLabels(song.title, song.artist);
+        const artist = labelsById.get(song.id)?.artist ?? song.artist;
         return (
           song.album === album.album &&
-          artistGroupKey(labels.artist) === artistGroupKey(album.artist)
+          artistGroupKey(artist) === artistGroupKey(album.artist)
         );
       });
       if (items.length === 0) return;
       playAll(items, 0, false, "all");
     },
-    [playAll, sortedSongs],
+    [labelsById, playAll, sortedSongs],
   );
 
   const onPlayArtist = useCallback(
     (artist: string) => {
+      const key = artistGroupKey(artist);
       const items = sortedSongs.filter(
         (song) =>
-          artistGroupKey(
-            normalizeTrackLabels(song.title, song.artist).artist,
-          ) === artistGroupKey(artist),
+          artistGroupKey(labelsById.get(song.id)?.artist ?? song.artist) === key,
       );
       if (items.length === 0) return;
       playAll(items, 0, false, "all");
     },
-    [playAll, sortedSongs],
+    [labelsById, playAll, sortedSongs],
   );
 
   useEffect(() => {
@@ -478,7 +471,7 @@ export default function LibraryScreen() {
       ) : null}
 
       {filter === "Playlists" ? (
-        <ScrollView className="flex-1" contentContainerClassName="pb-10">
+        <ScrollView className="flex-1" contentContainerClassName="pb-28">
           {renderLibraryHeader()}
           {sortedPlaylists.length === 0 ? (
             <EmptyState
@@ -572,29 +565,43 @@ const ArtistItem = memo(function ArtistItem({
   artist: ArtistRow;
   onPress: (artist: string) => void;
 }) {
-  const { highlight, pressProps } = useRowHighlight();
+  const { width: screenWidth } = useWindowDimensions();
+  const { highlightStyle, pressProps } = useRowHighlight();
+  const textWidth = Math.max(
+    96,
+    screenWidth -
+      22 * 2 -
+      ARTIST_ARTWORK_SIZE -
+      16 -
+      12,
+  );
   return (
     <Pressable
       {...pressProps}
-      style={[styles.artistPress, highlight]}
+      android_ripple={{ color: "rgba(255,255,255,0.12)" }}
+      accessibilityRole="button"
       onPress={() => onPress(artist.artist)}
     >
-      <View style={styles.artistRow}>
-        <Artwork
-          uri={artist.artwork}
-          title={artist.artist}
-          size={56}
-          rounded={28}
-        />
-        <View style={styles.artistMeta}>
-          <Text style={styles.artistName} numberOfLines={1}>
-            {artist.artist}
-          </Text>
-          <Text style={styles.artistCount}>
-            {artist.count} {artist.count === 1 ? "song" : "songs"}
-          </Text>
+      <Animated.View style={[styles.artistWrap, highlightStyle]}>
+        <View style={styles.artistRow}>
+          <View style={styles.artistArtworkSlot}>
+            <Artwork
+              uri={artist.artwork}
+              title={artist.artist}
+              size={ARTIST_ARTWORK_SIZE}
+              rounded={28}
+            />
+          </View>
+          <View style={[styles.artistMeta, { width: textWidth }]}>
+            <Text style={styles.artistName} numberOfLines={1}>
+              {artist.artist}
+            </Text>
+            <Text style={styles.artistCount} numberOfLines={1}>
+              {artist.count} {artist.count === 1 ? "song" : "songs"}
+            </Text>
+          </View>
         </View>
-      </View>
+      </Animated.View>
     </Pressable>
   );
 });
@@ -645,29 +652,41 @@ const LibraryHeader = memo(function LibraryHeader({
   trackCount,
   onOpenFilter,
 }: {
-  filter: string;
+  filter: (typeof FILTERS)[number];
   trackCount: number;
   onOpenFilter: () => void;
 }) {
   return (
     <View style={styles.header}>
       <View style={styles.headerRow}>
-        <Text style={styles.headerTitle}>Library</Text>
+        <View>
+          <Text style={styles.headerEyebrow}>YOUR MUSIC</Text>
+          <Text style={styles.headerTitle}>Library</Text>
+        </View>
         <Pressable
           hitSlop={12}
           onPress={onOpenFilter}
-          style={styles.headerButton}
+          accessibilityRole="button"
+          accessibilityLabel="Filter and sort library"
+          style={({ pressed }) => [
+            styles.headerButton,
+            pressed && styles.headerButtonPressed,
+          ]}
         >
           <SymbolView
-            name={{ ios: "ellipsis", android: "more_vert", web: "more_vert" }}
+            name={{
+              ios: "line.3.horizontal.decrease",
+              android: "tune",
+              web: "tune",
+            }}
             tintColor={colors.text}
-            size={22}
+            size={20}
           />
         </Pressable>
       </View>
       <Text style={styles.headerSubtitle}>
-        {filter} · {trackCount} {trackCount === 1 ? "track" : "tracks"} on this
-        device
+        {filter} · {trackCount} {trackCount === 1 ? "track" : "tracks"} available
+        offline
       </Text>
     </View>
   );
@@ -711,67 +730,98 @@ function rowKeyExtractor(row: { key: string }) {
   return row.key;
 }
 
-const listContentStyle = { paddingBottom: 72 };
+const listContentStyle = {
+  paddingBottom: 24,
+  width: "100%" as const,
+};
 
 const styles = StyleSheet.create({
   header: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 8,
+    paddingTop: 14,
+    paddingBottom: 10,
   },
   headerRow: {
+    paddingHorizontal: 22,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
+  headerEyebrow: {
+    marginBottom: 2,
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 1.8,
+    color: colors.accent,
+  },
   headerTitle: {
-    fontSize: 34,
-    fontWeight: "700",
-    letterSpacing: -0.4,
+    fontSize: 36,
+    fontWeight: "800",
+    letterSpacing: -1,
     color: colors.text,
   },
   headerButton: {
-    height: 40,
-    width: 40,
+    height: 44,
+    width: 44,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: 20,
+    borderRadius: 16,
     backgroundColor: colors.elevated,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  headerButtonPressed: {
+    opacity: 0.72,
+    transform: [{ scale: 0.96 }],
   },
   headerSubtitle: {
-    marginTop: 4,
+    marginTop: 6,
+    paddingHorizontal: 22,
     fontSize: 14,
     color: colors.muted,
   },
-  artistPress: {
+  artistWrap: {
     height: ARTIST_ROW_HEIGHT,
-    marginHorizontal: 12,
-    borderRadius: 12,
+    alignSelf: "stretch",
+    marginHorizontal: 8,
+    paddingHorizontal: 14,
+    paddingVertical: ARTIST_ROW_PADDING_Y,
+    justifyContent: "center",
+    cursor: "pointer",
   },
   artistRow: {
-    flex: 1,
+    height: ARTIST_ARTWORK_SIZE,
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 8,
+  },
+  artistArtworkSlot: {
+    width: ARTIST_ARTWORK_SIZE,
+    height: ARTIST_ARTWORK_SIZE,
+    marginRight: 16,
+    flexShrink: 0,
   },
   artistMeta: {
-    flex: 1,
-    marginLeft: 12,
+    justifyContent: "center",
+    flexShrink: 1,
   },
   artistName: {
     fontSize: 15,
+    lineHeight: 19,
     fontWeight: "600",
     color: colors.text,
+    includeFontPadding: false,
   },
   artistCount: {
     marginTop: 2,
     fontSize: 14,
+    lineHeight: 18,
     color: colors.muted,
+    includeFontPadding: false,
   },
   albumPair: {
     flexDirection: "row",
-    paddingHorizontal: 12,
-    gap: 8,
+    paddingHorizontal: 20,
+    paddingBottom: ALBUM_ROW_GAP,
+    gap: 12,
   },
   albumCell: {
     flex: 1,

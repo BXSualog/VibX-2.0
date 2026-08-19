@@ -2,9 +2,14 @@ import { create } from 'zustand';
 import { File, Paths } from 'expo-file-system';
 import * as db from '@/src/services/database';
 import { backfillMissingDurations, backfillSongMetadata, deleteLocalSongFile } from '@/src/services/downloads/import';
+import { prefetchLibraryLyrics } from '@/src/services/lyrics/loadLyrics';
 import type { Playlist, Song } from '@/src/types/music';
 import { isLockedPlaylist, VIBED_PLAYLIST_ID } from '@/src/constants/playlists';
+import { warmupLibraryCatalog } from '@/src/utils/libraryCatalog';
+import { dedupeSongs } from '@/src/utils/songIdentity';
 import { normalizeDuration } from '@/src/utils/audioDuration';
+import { ensureWebMockSong } from '@/src/services/webMockSong';
+import { Platform } from 'react-native';
 
 type LibraryState = {
   songs: Song[];
@@ -40,8 +45,12 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   ready: false,
   load: async () => {
     await db.initDatabase();
-    const demos = await db.deleteDemoSongs();
-    await Promise.all(demos.map((song) => deleteLocalSongFile(song.localPath)));
+    if (Platform.OS === 'web') {
+      await ensureWebMockSong();
+    } else {
+      const demos = await db.deleteDemoSongs();
+      await Promise.all(demos.map((song) => deleteLocalSongFile(song.localPath)));
+    }
     await get().refresh();
     set({ ready: true });
   },
@@ -51,6 +60,21 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       await Promise.all(
         get().favorites.map((song) => db.addSongToPlaylist(VIBED_PLAYLIST_ID, song.id))
       );
+      if (Platform.OS === 'web') return;
+
+      const extras = await db.mergeDuplicateSongs();
+      if (extras.length > 0) {
+        const remaining = new Set(
+          (await db.getSongs()).map((song) => song.localPath.toLowerCase())
+        );
+        await Promise.all(
+          extras
+            .filter((song) => song.localPath && !remaining.has(song.localPath.toLowerCase()))
+            .map((song) => deleteLocalSongFile(song.localPath))
+        );
+        await get().refresh();
+      }
+
       let changed = await backfillMissingDurations(get().songs);
       const marker = new File(Paths.document, METADATA_BACKFILL_MARKER);
       if (!marker.exists) {
@@ -63,6 +87,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         }
       }
       if (changed) await get().refresh();
+      void prefetchLibraryLyrics(get().songs);
     })();
     return maintenancePromise;
   },
@@ -75,17 +100,26 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       db.getPopular(),
       db.getPlayStats(),
     ]);
-    set({ songs, playlists, favorites, recent, popular, playStats });
+    const uniqueSongs = dedupeSongs(songs);
+    set({
+      songs: uniqueSongs,
+      playlists,
+      favorites: dedupeSongs(favorites),
+      recent: dedupeSongs(recent),
+      popular: dedupeSongs(popular),
+      playStats,
+    });
+    warmupLibraryCatalog(uniqueSongs);
   },
   recordPlay: async (songId) => {
     await db.recordPlay(songId);
     const recent = await db.getRecent();
-    set({ recent });
+    set({ recent: dedupeSongs(recent) });
   },
   recordCompletedPlay: async (songId) => {
     await db.recordCompletedPlay(songId);
     const [popular, playStats] = await Promise.all([db.getPopular(), db.getPlayStats()]);
-    set({ popular, playStats });
+    set({ popular: dedupeSongs(popular), playStats });
   },
   toggleFavorite: async (songId) => {
     const liked = await db.toggleFavorite(songId);

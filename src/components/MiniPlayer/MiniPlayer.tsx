@@ -1,14 +1,13 @@
 import { Artwork } from "@/src/components/Artwork";
+import { useCatalogStore } from "@/src/stores/catalogStore";
 import { useLibraryStore } from "@/src/stores/libraryStore";
 import { usePlayerStore } from "@/src/stores/playerStore";
 import { colors } from "@/src/theme/colors";
+import { isPreviewSong, previewCap } from "@/src/utils/catalog";
 import { normalizeTrackLabels } from "@/src/utils/metadata";
-import TrackPlayer, {
-  useActiveMediaItem,
-  useProgress,
-} from "@rntp/player";
+import TrackPlayer, { useActiveMediaItem, useProgress } from "@rntp/player";
 import * as Haptics from "expo-haptics";
-import { router } from "expo-router";
+import { router, usePathname } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { memo, useCallback } from "react";
 import { Text, View } from "react-native";
@@ -26,14 +25,12 @@ import Animated, {
 
 const SKIP_DISTANCE = 72;
 const SKIP_VELOCITY = 800;
-export const MINI_PLAYER_HEIGHT = 75;
+export const MINI_PLAYER_HEIGHT = 76;
 
-function MiniProgressBar() {
+function MiniProgressBar({ preview, cap }: { preview: boolean; cap: number }) {
   const progress = useProgress(1);
-  const ratio =
-    progress.duration > 0
-      ? Math.min(progress.position / progress.duration, 1)
-      : 0;
+  const duration = preview ? cap : progress.duration;
+  const ratio = duration > 0 ? Math.min(progress.position / duration, 1) : 0;
 
   return (
     <View style={{ height: 3, backgroundColor: "rgba(255,255,255,0.12)" }}>
@@ -50,11 +47,17 @@ function MiniProgressBar() {
 
 export const MiniPlayer = memo(function MiniPlayer() {
   const item = useActiveMediaItem();
+  const currentSong = usePlayerStore((state) => state.currentSong);
   const playing = usePlayerStore((state) => state.isPlaying);
   const songs = useLibraryStore((state) => state.songs);
+  const catalogSong = useCatalogStore((state) => {
+    const id = item?.mediaId ?? currentSong?.id;
+    return id ? state.byId[id] : undefined;
+  });
   const togglePlay = usePlayerStore((state) => state.togglePlay);
   const skipNext = usePlayerStore((state) => state.skipNext);
   const skipPrevious = usePlayerStore((state) => state.skipPrevious);
+  const pathname = usePathname();
   const dragX = useSharedValue(0);
 
   const openPlayer = useCallback(() => {
@@ -93,29 +96,34 @@ export const MiniPlayer = memo(function MiniPlayer() {
     transform: [{ translateX: dragX.value }],
   }));
 
-  if (!item) return null;
+  if (pathname === "/player") return null;
+  if (!item && !currentSong) return null;
 
-  const song = songs.find((entry) => entry.id === item.mediaId);
+  const song =
+    songs.find((entry) => entry.id === (item?.mediaId ?? currentSong?.id)) ??
+    catalogSong ??
+    currentSong;
   const labels = normalizeTrackLabels(
-    song?.title ?? item.title ?? "Unknown",
-    song?.artist ?? item.artist,
+    song?.title ?? item?.title ?? "Unknown",
+    song?.artist ?? item?.artist,
   );
+  const extras = item?.extras as { preview?: string } | undefined;
+  const preview = extras?.preview === "1" || isPreviewSong(song);
   const artwork =
     song?.artwork ??
-    (typeof item.artworkUrl === "string" ? item.artworkUrl : null);
+    (typeof item?.artworkUrl === "string" ? item.artworkUrl : null);
 
   return (
     <View
       style={{
-        marginHorizontal: 12,
-        marginBottom: 8,
-        borderRadius: 18,
-        overflow: "hidden",
-        backgroundColor: colors.elevated,
-        borderWidth: 1,
-        borderColor: "rgba(255,255,255,0.08)",
+        backgroundColor: colors.background,
+        borderTopWidth: 1,
+        borderTopColor: "rgba(255,255,255,0.05)",
+        borderBottomWidth: 1,
+        borderBottomColor: "rgba(255,255,255,0.05)",
       }}
     >
+      <MiniProgressBar preview={preview} cap={previewCap(song)} />
       <GestureDetector gesture={pan}>
         <Animated.View
           style={[
@@ -123,8 +131,8 @@ export const MiniPlayer = memo(function MiniPlayer() {
               height: MINI_PLAYER_HEIGHT,
               flexDirection: "row",
               alignItems: "center",
-              paddingLeft: 8,
-              paddingRight: 8,
+              paddingLeft: 14,
+              paddingRight: 10,
             },
             dragStyle,
           ]}
@@ -147,7 +155,7 @@ export const MiniPlayer = memo(function MiniPlayer() {
               rounded={10}
             />
             <View
-              style={{ flex: 1, minWidth: 0, marginLeft: 10, marginRight: 8 }}
+              style={{ flex: 1, minWidth: 0, marginLeft: 14, marginRight: 10 }}
             >
               <Text
                 numberOfLines={1}
@@ -159,14 +167,15 @@ export const MiniPlayer = memo(function MiniPlayer() {
                 numberOfLines={1}
                 style={{ marginTop: 2, fontSize: 12, color: colors.muted }}
               >
-                {labels.artist}
+                {preview ? `Preview · ${labels.artist}` : labels.artist}
               </Text>
             </View>
           </Pressable>
           <Pressable
             onPress={skipPrevious}
+            hitSlop={6}
             style={{
-              width: 40,
+              width: 44,
               height: MINI_PLAYER_HEIGHT,
               alignItems: "center",
               justifyContent: "center",
@@ -185,9 +194,10 @@ export const MiniPlayer = memo(function MiniPlayer() {
           <Pressable
             onPress={togglePlay}
             style={{
-              width: 42,
-              height: 42,
-              borderRadius: 21,
+              width: 46,
+              height: 46,
+              borderRadius: 23,
+              marginHorizontal: 4,
               backgroundColor: colors.primary,
               alignItems: "center",
               justifyContent: "center",
@@ -205,8 +215,9 @@ export const MiniPlayer = memo(function MiniPlayer() {
           </Pressable>
           <Pressable
             onPress={skipNext}
+            hitSlop={6}
             style={{
-              width: 40,
+              width: 44,
               height: MINI_PLAYER_HEIGHT,
               alignItems: "center",
               justifyContent: "center",
@@ -224,7 +235,6 @@ export const MiniPlayer = memo(function MiniPlayer() {
           </Pressable>
         </Animated.View>
       </GestureDetector>
-      <MiniProgressBar />
     </View>
   );
 });

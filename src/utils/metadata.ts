@@ -15,9 +15,9 @@ export type TrackMetadata = {
   album?: string;
 };
 
-export function decodeDisplayName(value: string): string {
-  if (!value) return '';
-  let text = value.trim();
+export function decodeDisplayName(value?: string | null): string {
+  if (value == null || value === '') return '';
+  let text = String(value).trim();
   for (let i = 0; i < 4; i += 1) {
     if (!ENCODED.test(text)) break;
     try {
@@ -31,30 +31,59 @@ export function decodeDisplayName(value: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
-export function normalizeTrackLabels(title: string, artist?: string): TrackMetadata {
-  const decodedTitle = decodeDisplayName(title);
-  const decodedArtist = decodeDisplayName(artist ?? '');
-  const unknownArtist = !usefulTag(decodedArtist);
-  const combined = / [-–—] /.test(decodedTitle);
-  const encoded = ENCODED.test(title) || ENCODED.test(artist ?? '');
-  const known = knownArtistSet();
+function spacedFilename(value: string): string {
+  return value
+    .replace(/_+/g, ' ')
+    .replace(/\s*[-–—]+\s*/g, ' - ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[-–—.\s]+|[-–—.\s]+$/g, '')
+    .trim();
+}
 
-  if (encoded || (unknownArtist && combined)) {
-    const parsed = parseFilenameMetadata(decodedTitle);
-    return finishLabels(
-      parsed.title,
-      usefulTag(decodedArtist) && !isKnownArtist(decodedTitle, known)
-        ? decodedArtist
-        : parsed.artist,
-      parsed.album,
-    );
+const LABEL_CACHE_LIMIT = 12000;
+const labelCache = new Map<string, TrackMetadata>();
+let defaultKnownArtists: Set<string> | null = null;
+
+export function normalizeTrackLabels(title?: string | null, artist?: string | null): TrackMetadata {
+  const key = `${title ?? ''}\u0000${artist ?? ''}`;
+  const cached = labelCache.get(key);
+  if (cached) return cached;
+
+  const result = computeTrackLabels(title, artist);
+  if (labelCache.size >= LABEL_CACHE_LIMIT) labelCache.clear();
+  labelCache.set(key, result);
+  return result;
+}
+
+function computeTrackLabels(title?: string | null, artist?: string | null): TrackMetadata {
+  try {
+    const decodedTitle = decodeDisplayName(title);
+    const decodedArtist = decodeDisplayName(artist);
+    const spacedTitle = spacedFilename(decodedTitle) || decodedTitle;
+    const unknownArtist = !usefulTag(decodedArtist);
+    const combined = / [-–—] /.test(spacedTitle);
+    const encoded = ENCODED.test(String(title ?? '')) || ENCODED.test(String(artist ?? ''));
+    const known = knownArtistSet();
+
+    if (encoded || (unknownArtist && combined)) {
+      const parsed = parseFilenameMetadata(spacedTitle || decodedTitle);
+      return finishLabels(
+        parsed.title,
+        usefulTag(decodedArtist) && !isKnownArtist(spacedTitle, known)
+          ? decodedArtist
+          : parsed.artist,
+        parsed.album,
+      );
+    }
+
+    if (isKnownArtist(spacedTitle, known) && !isKnownArtist(decodedArtist, known) && usefulTag(decodedArtist)) {
+      return finishLabels(decodedArtist, spacedTitle);
+    }
+
+    return finishLabels(spacedTitle, decodedArtist);
+  } catch {
+    return { title: decodeDisplayName(title) || 'Unknown Title', artist: decodeDisplayName(artist) || 'Unknown Artist' };
   }
-
-  if (isKnownArtist(decodedTitle, known) && !isKnownArtist(decodedArtist, known) && usefulTag(decodedArtist)) {
-    return finishLabels(decodedArtist, decodedTitle);
-  }
-
-  return finishLabels(decodedTitle, decodedArtist);
 }
 
 function finishLabels(title: string, artist: string, album?: string): TrackMetadata {
@@ -76,6 +105,12 @@ function cleanPart(value: string): string {
 }
 
 function knownArtistSet(extra: string[] = []): Set<string> {
+  if (extra.length === 0) {
+    if (!defaultKnownArtists) {
+      defaultKnownArtists = new Set(KNOWN_ARTISTS.map(artistMatchKey));
+    }
+    return defaultKnownArtists;
+  }
   return new Set([...KNOWN_ARTISTS, ...extra].map(artistMatchKey));
 }
 
@@ -105,7 +140,7 @@ function artistScore(value: string, known: Set<string>): number {
 }
 
 export function parseFilenameMetadata(filename: string, knownArtists: string[] = []): TrackMetadata {
-  const base = cleanPart(filename.replace(AUDIO_EXT, '').replace(TRACK_NO, '').trim());
+  const base = cleanPart(spacedFilename(filename.replace(AUDIO_EXT, '')).replace(TRACK_NO, '').trim());
   const known = knownArtistSet(knownArtists);
   const separators = [' - ', ' – ', ' — '];
 

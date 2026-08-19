@@ -1,9 +1,15 @@
+import { PlayerLyrics } from "@/src/components/PlayerLyrics/PlayerLyrics";
 import { PlayingIndicator } from "@/src/components/PlayingIndicator";
+import { useTrackLyrics } from "@/src/hooks/useTrackLyrics";
+import { useRowHighlight } from "@/src/hooks/useHover";
 import { useLibraryStore } from "@/src/stores/libraryStore";
 import { usePlayerStore } from "@/src/stores/playerStore";
+import { useCatalogStore } from "@/src/stores/catalogStore";
+import { useDownloadStore } from "@/src/stores/downloadStore";
 import { colors } from "@/src/theme/colors";
 import { brightCoverPalette } from "@/src/utils/cover";
 import { formatTime } from "@/src/utils/format";
+import { isPreviewSong, previewCap } from "@/src/utils/catalog";
 import { normalizeTrackLabels } from "@/src/utils/metadata";
 import Slider from "@react-native-community/slider";
 import TrackPlayer, {
@@ -14,7 +20,7 @@ import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import { SymbolView } from "expo-symbols";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
 import {
   FlatList,
   Pressable,
@@ -131,14 +137,102 @@ function PlayerHeroArt({
   );
 }
 
+const QueueSongRow = memo(function QueueSongRow({
+  title,
+  artist,
+  duration,
+  prefix,
+  active,
+  playing,
+  onPress,
+}: {
+  title: string;
+  artist: string;
+  duration: number;
+  prefix: string;
+  active: boolean;
+  playing: boolean;
+  onPress: () => void;
+}) {
+  const { highlightStyle, pressProps } = useRowHighlight();
+
+  return (
+    <Pressable
+      {...pressProps}
+      onPress={onPress}
+      android_ripple={{ color: "rgba(255,255,255,0.12)" }}
+      accessibilityRole="button"
+    >
+      <Animated.View
+        className="flex-row items-center justify-center rounded-xl"
+        style={[
+          { height: QUEUE_ITEM_HEIGHT, cursor: "pointer" as const },
+          highlightStyle,
+        ]}
+      >
+        <View className="min-w-0 flex-1">
+          <Text
+            className={active ? "font-bold text-vibx-accent" : "text-vibx-text"}
+            numberOfLines={1}
+          >
+            {prefix}
+            {title}
+          </Text>
+          <Text className="text-xs text-vibx-muted">{artist}</Text>
+          {active && playing ? <PlayingIndicator /> : null}
+        </View>
+        <Text className="ml-3 text-xs text-vibx-muted">
+          {formatTime(duration)}
+        </Text>
+      </Animated.View>
+    </Pressable>
+  );
+});
+
+const PlayerSeekBar = memo(function PlayerSeekBar({
+  duration,
+  onSeek,
+}: {
+  duration: number;
+  onSeek: (position: number) => void;
+}) {
+  const progress = useProgress(0.25);
+  const total = Math.max(duration > 1 ? duration : progress.duration, 1);
+  const position = Math.min(progress.position, total);
+
+  return (
+    <View className="mt-7">
+      <Slider
+        value={position}
+        minimumValue={0}
+        maximumValue={total}
+        onSlidingComplete={onSeek}
+        minimumTrackTintColor={colors.accent}
+        maximumTrackTintColor="rgba(255,255,255,0.16)"
+        thumbTintColor={colors.text}
+      />
+      <View className="-mt-1 flex-row justify-between px-0.5">
+        <Text className="text-xs text-vibx-muted">{formatTime(position)}</Text>
+        <Text className="text-xs text-vibx-muted">{formatTime(total)}</Text>
+      </View>
+    </View>
+  );
+});
+
 export default function PlayerScreen() {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const item = useActiveMediaItem();
-  const progress = useProgress(0.25);
+  const currentSong = usePlayerStore((state) => state.currentSong);
   const songs = useLibraryStore((state) => state.songs);
   const isFavorite = useLibraryStore((state) => state.isFavorite);
   const toggleFavorite = useLibraryStore((state) => state.toggleFavorite);
+  const downloadSong = useDownloadStore((state) => state.downloadSong);
+  const downloadJobs = useDownloadStore((state) => state.jobs);
+  const catalogSong = useCatalogStore((state) => {
+    const id = item?.mediaId ?? currentSong?.id;
+    return id ? state.byId[id] : undefined;
+  });
   const shuffle = usePlayerStore((state) => state.shuffle);
   const repeat = usePlayerStore((state) => state.repeat);
   const playing = usePlayerStore((state) => state.isPlaying);
@@ -191,7 +285,26 @@ export default function PlayerScreen() {
     transform: [{ translateY: dragY.value }],
   }));
 
-  const song = songs.find((entry) => entry.id === item?.mediaId);
+  const song =
+    songs.find((entry) => entry.id === (item?.mediaId ?? currentSong?.id)) ??
+    catalogSong ??
+    currentSong;
+  const extras = item?.extras as { preview?: string } | undefined;
+  const preview = extras?.preview === "1" || isPreviewSong(song);
+  const cap = previewCap(song);
+  const duration = preview ? cap : song?.duration || 0;
+  const downloadJob = song ? downloadJobs[song.id] : undefined;
+  const downloading =
+    downloadJob?.status === "queued" || downloadJob?.status === "downloading";
+  const saved = Boolean(song?.isDownloaded);
+  const onSeek = useCallback(
+    (position: number) => {
+      seek(preview ? Math.min(position, cap) : position);
+    },
+    [cap, preview, seek],
+  );
+  const lyrics = useTrackLyrics(song, duration);
+  const hasLyrics = Boolean(lyrics?.lines.length);
   const queue = TrackPlayer.getQueue?.() ?? [];
   const activeIndex = TrackPlayer.getActiveMediaItemIndex?.() ?? 0;
   const labels = normalizeTrackLabels(
@@ -199,13 +312,11 @@ export default function PlayerScreen() {
     song?.artist ?? item?.artist ?? "VibX 2.0 offline player",
   );
   const title = labels.title;
-  const artist = item ? labels.artist : "VibX 2.0 offline player";
+  const artist = item || currentSong ? labels.artist : "VibX 2.0 offline player";
   const artwork =
     song?.artwork ??
     (typeof item?.artworkUrl === "string" ? item.artworkUrl : null);
   const liked = song ? isFavorite(song.id) : false;
-  const duration =
-    progress.duration > 0 ? progress.duration : song?.duration || 0;
 
   const artSize = Math.round(
     Math.min(
@@ -249,42 +360,30 @@ export default function PlayerScreen() {
     }: {
       item: (typeof queue)[number];
       index: number;
-    }) => (
-      <Pressable
-        onPress={() => TrackPlayer.skipToIndex(index)}
-        className="flex-row items-center justify-center rounded-xl active:bg-white/5"
-        style={{ height: QUEUE_ITEM_HEIGHT }}
-      >
-        <View className="min-w-0 flex-1">
-          <Text
-            className={
-              index === activeIndex
-                ? "font-bold text-vibx-accent"
-                : "text-vibx-text"
-            }
-            numberOfLines={1}
-          >
-            {index === currentQueueIndex
-              ? "Now · "
-              : index === currentQueueIndex + 1
-                ? "Next · "
-                : ""}
-            {normalizeTrackLabels(queued.title ?? "", queued.artist).title}
-          </Text>
-          <Text className="text-xs text-vibx-muted">
-            {normalizeTrackLabels(queued.title ?? "", queued.artist).artist}
-          </Text>
-          {index === activeIndex && playing ? <PlayingIndicator /> : null}
-        </View>
-        <Text className="ml-3 text-xs text-vibx-muted">
-          {formatTime(
+    }) => {
+      const labels = normalizeTrackLabels(queued.title ?? "", queued.artist);
+      const prefix =
+        index === currentQueueIndex
+          ? "Now · "
+          : index === currentQueueIndex + 1
+            ? "Next · "
+            : "";
+      return (
+        <QueueSongRow
+          title={labels.title}
+          artist={labels.artist}
+          duration={
             queued.duration ||
-              songs.find((entry) => entry.id === queued.mediaId)?.duration ||
-              0,
-          )}
-        </Text>
-      </Pressable>
-    ),
+            songs.find((entry) => entry.id === queued.mediaId)?.duration ||
+            0
+          }
+          prefix={prefix}
+          active={index === activeIndex}
+          playing={playing}
+          onPress={() => TrackPlayer.skipToIndex(index)}
+        />
+      );
+    },
     [activeIndex, currentQueueIndex, playing, songs],
   );
 
@@ -293,16 +392,36 @@ export default function PlayerScreen() {
       <View
         className={`${queueOpen ? "mb-5" : "min-h-[240px] flex-1"} items-center justify-center`}
       >
-        <PlayerHeroArt
-          uri={artwork}
-          title={title}
-          artist={artist}
-          size={artSize}
-        />
+        {hasLyrics && lyrics ? (
+          <PlayerLyrics
+            lines={lyrics.lines}
+            title={title}
+            artist={artist}
+            height={Math.round(
+              Math.min(
+                height * (queueOpen ? 0.2 : 0.4),
+                queueOpen ? 168 : 340,
+              ),
+            )}
+            onSeek={onSeek}
+          />
+        ) : (
+          <PlayerHeroArt
+            uri={artwork}
+            title={title}
+            artist={artist}
+            size={artSize}
+          />
+        )}
       </View>
 
       <View className="flex-row items-center gap-3">
         <View className="min-w-0 flex-1">
+          {preview ? (
+            <Text className="mb-1 text-[11px] font-bold uppercase tracking-[1.6px] text-vibx-accent">
+              Preview
+            </Text>
+          ) : null}
           <Text
             className="text-[26px] font-bold leading-8 tracking-tight text-vibx-text"
             numberOfLines={2}
@@ -316,7 +435,31 @@ export default function PlayerScreen() {
             {artist}
           </Text>
         </View>
-        {song ? (
+        {song && preview ? (
+          <Pressable
+            onPress={() => {
+              if (!song.downloadUrl) return;
+              void downloadSong(song);
+            }}
+            disabled={!song.downloadUrl && !downloading}
+            hitSlop={4}
+            accessibilityLabel={
+              song.downloadUrl ? "Download full track" : "Full track not available"
+            }
+            className={`h-12 items-center justify-center rounded-full bg-white/10 px-3.5 ${
+              song.downloadUrl || downloading ? "" : "opacity-50"
+            }`}
+          >
+            <Text className="text-xs font-bold text-vibx-text">
+              {downloading
+                ? `${Math.round((downloadJob?.progress ?? 0) * 100)}%`
+                : song.downloadUrl
+                  ? "Download"
+                  : "Preview only"}
+            </Text>
+          </Pressable>
+        ) : null}
+        {song && saved ? (
           <Pressable
             onPress={() => void toggleFavorite(song.id)}
             hitSlop={4}
@@ -335,25 +478,7 @@ export default function PlayerScreen() {
         ) : null}
       </View>
 
-      <View className="mt-7">
-        <Slider
-          value={progress.position}
-          minimumValue={0}
-          maximumValue={Math.max(duration, 1)}
-          onSlidingComplete={seek}
-          minimumTrackTintColor={colors.accent}
-          maximumTrackTintColor="rgba(255,255,255,0.16)"
-          thumbTintColor={colors.text}
-        />
-        <View className="-mt-1 flex-row justify-between px-0.5">
-          <Text className="text-xs text-vibx-muted">
-            {formatTime(progress.position)}
-          </Text>
-          <Text className="text-xs text-vibx-muted">
-            {formatTime(duration)}
-          </Text>
-        </View>
-      </View>
+      <PlayerSeekBar duration={duration} onSeek={onSeek} />
 
       <View className="mt-6 flex-row items-center justify-between overflow-visible px-1">
         <Pressable
@@ -525,6 +650,8 @@ export default function PlayerScreen() {
                 showsVerticalScrollIndicator={false}
               />
             </>
+          ) : hasLyrics ? (
+            <View className="flex-1">{playerChrome}</View>
           ) : (
             <ScrollView
               className="flex-1"

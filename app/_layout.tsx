@@ -8,7 +8,6 @@ import 'react-native-reanimated';
 
 import { colors } from '@/src/theme/colors';
 import { useBootstrap } from '@/src/hooks/useBootstrap';
-import { MiniPlayerDock } from '@/src/components/MiniPlayer/MiniPlayerDock';
 
 enableFreeze(true);
 
@@ -54,6 +53,24 @@ export default function RootLayout() {
             }}
           />
           <Stack.Screen
+            name="browse"
+            options={{
+              animation: 'slide_from_right',
+            }}
+          />
+          <Stack.Screen
+            name="catalog-album"
+            options={{
+              animation: 'slide_from_right',
+            }}
+          />
+          <Stack.Screen
+            name="catalog-artist"
+            options={{
+              animation: 'slide_from_right',
+            }}
+          />
+          <Stack.Screen
             name="album"
             options={{
               animation: 'slide_from_right',
@@ -69,7 +86,6 @@ export default function RootLayout() {
             }}
           />
         </Stack>
-        <MiniPlayerDock />
       </ThemeProvider>
     </GestureHandlerRootView>
   );
